@@ -1,0 +1,30 @@
+# Build outputs
+**/[Bb]in/
+**/[Oo]bj/
+**/[Dd]ebug/
+**/[Rr]elease/
+**/artifacts/
+
+# IDE and editor
+**/.vs/
+**/.vscode/
+**/.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# Logs and caches
+*.log
+*.cache
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Local secrets / environment-specific config
+**/appsettings.Development.json
+secrets.json
