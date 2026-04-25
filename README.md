@@ -1,101 +1,113 @@
-﻿# Webhook + Kafka Realtime Event Pipeline
+# Technical Specification: Facebook Webhook and Kafka Realtime Event Pipeline
 
-## 📍 Summary
+## 1. Project Overview
 
-Xây dựng `webhook-service` là một project ASP.NET Core độc lập trong solution để xử lý luồng sự kiện realtime từ Facebook Page. Service này đóng vai trò là Gateway tiếp nhận Webhooks, xác thực bảo mật, chuẩn hóa dữ liệu (normalize) và đẩy vào hệ thống Message Queue (Kafka) để các Core Service khác xử lý.
+Dự án này tập trung vào việc thiết lập hệ thống xử lý sự kiện thời gian thực (real-time) từ nền tảng Facebook Webhooks. Hệ thống được thiết kế theo kiến trúc hướng sự kiện (Event-Driven Architecture) với hai thành phần chính:
 
-## 🏗️ Architecture Overview
+- **WebhookService**: Đóng vai trò là Gateway tiếp nhận yêu cầu từ Meta, thực hiện xác thực chữ ký HMAC, chuẩn hóa dữ liệu và đẩy vào hệ thống hàng đợi Kafka.
+- **Page API**: Đóng vai trò là Consumer, tiếp nhận dữ liệu từ Kafka để thực thi các logic nghiệp vụ và lưu trữ thông tin vào cơ sở dữ liệu.
+
+## 2. System Architecture
+
+Hệ thống được tổ chức theo quy trình luồng dữ liệu dưới đây:
 
 ```mermaid
 graph LR
-    FB[Facebook Graph API] -- Webhook Event --> WS[Webhook Service :3001]
-    WS -- HMAC Verify & Normalize --> K[(Kafka Topic: facebook.events.normalized)]
-    K -- Consume Event --> CS[Core Service / Page API]
-    CS -- Process & Persist --> DB[(Database)]
+    FB["Facebook Graph API"] -- "Webhook Event" --> WS["Webhook Service (Port: 3001)"]
+    WS -- "HMAC Verify & Normalize" --> K[("Kafka Topic: facebook.events.normalized")]
+    K -- "Consume Event" --> CS["Core Service / Page API"]
+    CS -- "Process & Persist" --> DB[("Database")]
 ```
 
----
+## 3. Technical Prerequisites
 
-## 🛠️ Prerequisites & Dependencies
+### 3.1. Environments and SDKs
 
-### 1. Runtimes & SDKs
+- **.NET 8 SDK**: Nền tảng phát triển chính cho các dịch vụ phía Backend.
+- **Docker Desktop**: Yêu cầu để vận hành hạ tầng Kafka, Zookeeper và các công cụ quản trị liên quan.
 
-*   **[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0):** Framework chính để phát triển Webhook Service.
-*   **[Docker Desktop](https://www.docker.com/products/docker-desktop/):** Cần thiết để chạy Kafka, Zookeeper và Kafka UI local.
+### 3.2. Supporting Infrastructure
 
-### 2. NuGet Packages (Cần cài đặt trong Code)
+- **ngrok / Cloudflare Tunnel**: Công cụ tạo HTTPS tunnel để nhận request từ Meta tới môi trường local.
+- **Kafka UI**: Giao diện quản trị Kafka, mặc định truy cập tại địa chỉ `http://localhost:8080`.
 
-*   `Confluent.Kafka`: Thư viện chính để làm việc với Kafka (Producer/Consumer).
-*   `Newtonsoft.Json`: (Tùy chọn) Hỗ trợ parse JSON linh hoạt từ Facebook Webhooks.
+## 4. Deployment Guide
 
-### 3. External Tools & Services
+Yêu cầu thực hiện các câu lệnh từ thư mục gốc của dự án (Root Directory).
 
-*   **[ngrok](https://ngrok.com/) hoặc [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/):** Tạo public HTTPS tunnel để Meta có thể gửi Webhook tới localhost của bạn.
-*   **Kafka UI (Docker Image):** `provectuslabs/kafka-ui` - Khuyên dùng để quan sát message trong Kafka trực quan hơn.
-*   **Meta Graph API Explorer:** Công cụ web để test và lấy Access Token nhanh chóng.
+### Bước 1: Khởi tạo hạ tầng dịch vụ
 
-### 4. Meta Setup
+Sử dụng Docker Compose để triển khai Kafka và các dịch vụ phụ trợ:
 
-*   **Facebook Developer App:** Phải có `App ID` và `App Secret`.
-*   **Page Access Token:** Token có quyền `pages_manage_metadata` và `pages_read_engagement`.
+```powershell
+docker compose up -d
+```
 
----
+### Bước 2: Vận hành Webhook Service
 
-### Run Guide (Copy/Paste)
+Mở terminal và khởi động dịch vụ tiếp nhận webhook:
 
-1.  **Start Kafka + Zookeeper**
-    ```powershell
-    docker compose -f "d:\coding for Future\Page-API\docker-compose.yml" up -d
-    ```
-2.  **Run WebhookService**
-    ```powershell
-    dotnet run --project "d:\coding for Future\Page-API\Page API\WebhookService\WebhookService.csproj"
-    ```
-3.  **Run Page API (Kafka Consumer)**
-    ```powershell
-    dotnet run --project "d:\coding for Future\Page-API\Page API\Page API\Page API.csproj"
-    ```
-4.  **Check webhook health**
-    ```powershell
-    Invoke-WebRequest -Uri "http://localhost:3001/health" -UseBasicParsing
-    ```
-    *   Kỳ vọng: HTTP `200 OK`.
-5.  **Trigger event**
-    *   Cách 1: Comment thật trên post của Facebook Page đã subscribe field `feed`.
-    *   Cách 2: Dùng nút `Test` của field `feed` trong Meta Webhooks Dashboard.
-6.  **Verify logs**
-    *   `WebhookService` có log dạng: `Kafka published eventId=... topic=facebook.events.normalized`.
-    *   `Page API` có log dạng: `Processed facebook event EventId=...`.
-7.  **Pass criteria**
-    *   Có message mới trong topic `facebook.events.normalized`.
-    *   `Page API` consume và xử lý thành công event.
+```powershell
+dotnet run --project "Page API/WebhookService/WebhookService.csproj"
+```
 
-## 🛠️ Public Interfaces
+Mặc định dịch vụ sẽ lắng nghe tại cổng 3001.
 
-| Endpoint | Method | Description |
-| :--- | :--- | :--- |
-| `/webhook` | `GET` | Facebook callback verification |
-| `/webhook` | `POST` | Receive Facebook webhook events |
-| `/health` | `GET` | Service health check |
+### Bước 3: Vận hành Core API (Kafka Consumer)
 
----
+Khởi động dịch vụ xử lý dữ liệu từ hàng đợi:
 
-## 🧪 Test Plan
+```powershell
+dotnet run --project "Page API/Page API/Page API.csproj"
+```
 
-*   **Unit Tests:**
-    *   Verify Token logic cho `GET /webhook`.
-    *   HMAC Signature validation cho `POST /webhook`.
-    *   Normalizer logic cho các mẫu payload Facebook comment.
-*   **Integration Tests:**
-    *   Kiểm tra khả năng kết nối và publish message tới Kafka (Docker Compose).
-*   **Manual Tests:**
-    *   Sử dụng Meta Webhooks Dashboard (Test tool).
-    *   Thực hiện comment thật trên Facebook Page để kiểm tra realtime pipeline.
+### Bước 4: Xác thực trạng thái hoạt động
 
----
+Kiểm tra tình trạng kết nối của Webhook Service:
 
-## 📌 Assumptions
+```powershell
+Invoke-WebRequest -Uri "http://localhost:3001/health" -UseBasicParsing
+```
 
-*   `webhook-service` nằm trong cùng solution nhưng chạy độc lập để dễ scale.
-*   Hỗ trợ comment trước, các event khác (like, share, message) sẽ mở rộng sau.
-*   Môi trường dev local yêu cầu Tunnel (ngrok) để Meta có thể gửi request qua HTTPS.
+Kết quả mong đợi: Trạng thái HTTP 200 OK.
+
+## 5. Configuration and Integration
+
+### 5.1. Facebook Webhook Setup
+
+Để tích hợp với Meta Webhooks, cần thực hiện các cấu hình sau:
+
+1.  **Endpoint URL**: Sử dụng địa chỉ HTTPS được cấp bởi ngrok (ví dụ: `https://your-domain.ngrok-free.app/webhook`).
+2.  **Verify Token**: Giá trị token phải khớp với cấu hình trong file `appsettings.json` của WebhookService.
+3.  **Subscription Fields**: Đăng ký theo dõi trường `feed` để nhận các sự kiện bài viết và bình luận.
+
+### 5.2. Security Verification
+
+Hệ thống bắt buộc kiểm tra chữ ký `X-Hub-Signature-256` trong Header của mỗi request POST để đảm bảo tính toàn vẹn và xác thực nguồn gốc từ Meta.
+
+## 6. Verification and Testing
+
+### 6.1. Manual Verification
+
+Sử dụng công cụ Test Tool trong Meta Developer Dashboard để gửi các sự kiện giả lập. Kiểm tra nhật ký hệ thống (logs) để xác nhận luồng dữ liệu:
+
+- **WebhookService Log**: Xác nhận thông báo `Kafka published eventId=...`.
+- **Page API Log**: Xác nhận thông báo `Processed facebook event EventId=...`.
+
+### 6.2. Monitoring
+
+Người dùng có thể truy cập Kafka UI tại `http://localhost:8080` để kiểm tra trạng thái các topic và số lượng message đang tồn đọng trong hàng đợi.
+
+## 7. Public API Interfaces
+
+| Endpoint   | Method | Functionality                                        |
+| :--------- | :----- | :--------------------------------------------------- |
+| `/webhook` | `GET`  | Thực hiện quy trình xác thực (Challenge) với Meta    |
+| `/webhook` | `POST` | Tiếp nhận và xử lý payload sự kiện từ Facebook       |
+| `/health`  | `GET`  | Cung cấp thông tin trạng thái hoạt động của hệ thống |
+
+## 8. Operational Notes
+
+- **HTTPS Requirement**: Meta yêu cầu bắt buộc sử dụng giao thức HTTPS cho Callback URL.
+- **Latency**: Do sử dụng Kafka, dữ liệu có thể có độ trễ nhỏ tùy thuộc vào cấu hình của Consumer.
+- **Scaling**: WebhookService được thiết kế độc lập, cho phép mở rộng quy mô (Scale-out) dễ dàng khi lưu lượng sự kiện tăng cao.
