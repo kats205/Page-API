@@ -1,0 +1,11 @@
+@Page_API_HostAddress = http://localhost:5125
+
+GET {{Page_API_HostAddress}}/api/page/your-page-id
+Accept: application/json
+
+###
+
+GET {{Page_API_HostAddress}}/api/page/your-page-id/posts
+Accept: application/json
+
+###
