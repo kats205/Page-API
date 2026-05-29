@@ -1,6 +1,7 @@
 using Confluent.Kafka;
 using Microsoft.Extensions.Options;
-using Newtonsoft.Json;
+using System.Text.Json;
+using PageApi.Shared.Kafka;
 using WebhookService.Models;
 
 namespace WebhookService.Services;
@@ -10,6 +11,7 @@ public class KafkaEventPublisher : IKafkaEventPublisher, IDisposable
     private readonly IProducer<string, string> _producer;
     private readonly KafkaOptions _options;
     private readonly ILogger<KafkaEventPublisher> _logger;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public KafkaEventPublisher(IOptions<KafkaOptions> options, ILogger<KafkaEventPublisher> logger)
     {
@@ -37,12 +39,12 @@ public class KafkaEventPublisher : IKafkaEventPublisher, IDisposable
         _producer = new ProducerBuilder<string, string>(producerConfig).Build();
     }
 
-    public async Task PublishAsync(IReadOnlyList<NormalizedFacebookEvent> events, CancellationToken cancellationToken = default)
+    public async Task PublishAsync(IReadOnlyList<RawEventMessage> events, CancellationToken cancellationToken = default)
     {
         foreach (var normalizedEvent in events)
         {
             var key = BuildMessageKey(normalizedEvent);
-            var value = JsonConvert.SerializeObject(normalizedEvent);
+            var value = JsonSerializer.Serialize(normalizedEvent, JsonOptions);
 
             var delivery = await _producer.ProduceAsync(
                 _options.Topic,
@@ -58,11 +60,16 @@ public class KafkaEventPublisher : IKafkaEventPublisher, IDisposable
         }
     }
 
-    private static string BuildMessageKey(NormalizedFacebookEvent normalizedEvent)
+    private static string BuildMessageKey(RawEventMessage normalizedEvent)
     {
         if (!string.IsNullOrWhiteSpace(normalizedEvent.CommentId))
         {
             return normalizedEvent.CommentId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedEvent.MessageId))
+        {
+            return normalizedEvent.MessageId;
         }
 
         if (!string.IsNullOrWhiteSpace(normalizedEvent.PageId)

@@ -1,8 +1,8 @@
-using WebhookService.Models;
+using PageApi.Shared.Kafka;
 
 namespace WebhookService.Services;
 
 public interface IKafkaEventPublisher
 {
-    Task PublishAsync(IReadOnlyList<NormalizedFacebookEvent> events, CancellationToken cancellationToken = default);
+    Task PublishAsync(IReadOnlyList<RawEventMessage> events, CancellationToken cancellationToken = default);
 }
