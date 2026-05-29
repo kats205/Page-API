@@ -47,6 +47,40 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
 
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    depends_on:
+      - kafka
+    ports:
+      - "9308:9308"
+    command:
+      - "--kafka.server=kafka:29092"
+
+  prometheus:
+    image: prom/prometheus:latest
+    depends_on:
+      - kafka-exporter
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    depends_on:
+      - prometheus
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -60,3 +94,4 @@ services:
 
 volumes:
   postgres_data:
+  prometheus_data:
