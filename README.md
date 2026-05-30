@@ -1,113 +1,114 @@
-# Technical Specification: Facebook Webhook and Kafka Realtime Event Pipeline
+# Facebook Page API Microservices
 
-## 1. Project Overview
+Dự án này là hệ thống microservice phục vụ bài thực hành tích hợp Facebook Page API. Hệ thống nhận sự kiện bình luận/tin nhắn từ Facebook Webhook, xử lý nội dung bằng rule và AI, tự động phản hồi hoặc ẩn bình luận, đồng thời có pipeline retry, dead letter queue và cảnh báo vận hành.
 
-Dự án này tập trung vào việc thiết lập hệ thống xử lý sự kiện thời gian thực (real-time) từ nền tảng Facebook Webhooks. Hệ thống được thiết kế theo kiến trúc hướng sự kiện (Event-Driven Architecture) với hai thành phần chính:
+README chỉ mô tả tổng quan dự án. Hướng dẫn chạy, cấu hình và bộ test demo nằm trong thư mục [Docs](./Docs/).
 
-- **WebhookService**: Đóng vai trò là Gateway tiếp nhận yêu cầu từ Meta, thực hiện xác thực chữ ký HMAC, chuẩn hóa dữ liệu và đẩy vào hệ thống hàng đợi Kafka.
-- **Page API**: Đóng vai trò là Consumer, tiếp nhận dữ liệu từ Kafka để thực thi các logic nghiệp vụ và lưu trữ thông tin vào cơ sở dữ liệu.
+## Hệ thống làm được gì
 
-## 2. System Architecture
+- Nhận webhook từ Facebook Page và xác thực chữ ký `X-Hub-Signature-256`.
+- Chuẩn hóa event comment/message thành message nội bộ và publish vào Kafka.
+- Phân tích nội dung bình luận theo intent và sentiment:
+  - hỏi giá/tư vấn;
+  - phản hồi tích cực;
+  - phản hồi trung tính;
+  - phản hồi tiêu cực/khiếu nại;
+  - spam/link lạ;
+  - nội dung chưa rõ cần manual review.
+- Tự động hóa hành động:
+  - positive -> trả lời cảm ơn;
+  - neutral -> ghi nhận ý kiến;
+  - negative/complaint -> xin lỗi và đưa vào manual review;
+  - spam -> ẩn bình luận và review;
+  - unknown/rate limit -> manual review, không auto reply.
+- Gọi Facebook Graph API để reply/hide comment.
+- Có idempotency để tránh gửi trùng reply khi Kafka consume lại message.
+- Có retry với exponential backoff và giới hạn số lần thử.
+- Có dead letter queue cho message lỗi cuối cùng.
+- Có Prometheus, Alertmanager, Kafka Exporter và Discord alert cho DLQ.
+- Có test tự động cho các logic trọng yếu và bộ test thủ công trên Facebook Page thật.
 
-Hệ thống được tổ chức theo quy trình luồng dữ liệu dưới đây:
+## Kiến trúc tổng quan
+
+Dự án được tổ chức theo kiến trúc microservice dạng monorepo. Mỗi service là một project/process riêng, giao tiếp bất đồng bộ qua Kafka topic.
 
 ```mermaid
-graph LR
-    FB["Facebook Graph API"] -- "Webhook Event" --> WS["Webhook Service (Port: 3001)"]
-    WS -- "HMAC Verify & Normalize" --> K[("Kafka Topic: facebook.events.normalized")]
-    K -- "Consume Event" --> CS["Core Service / Page API"]
-    CS -- "Process & Persist" --> DB[("Database")]
+flowchart TB
+    FB[Facebook Page]
+
+    subgraph Ingestion
+        WH[webhook-service<br/>verify HMAC + normalize]
+        RAW[(Kafka: raw_events)]
+    end
+
+    subgraph Processing
+        CORE[core-service<br/>AI + rules + automation]
+        DB[(PostgreSQL<br/>state + review + idempotency)]
+        CMD[(Kafka: reply_commands)]
+    end
+
+    subgraph Delivery
+        BE[backend-api<br/>Graph API reply/hide]
+        FAILED[(Kafka: send_failed)]
+        RETRY[(Kafka: send_retry)]
+    end
+
+    subgraph Reliability
+        RS[retry-service<br/>backoff 1s/2s/4s]
+        DLQ[(Kafka: dead_letter)]
+        ALERT[Prometheus + Alertmanager<br/>Discord critical alert]
+    end
+
+    FB -->|Webhook POST| WH --> RAW --> CORE
+    CORE --> DB
+    CORE --> CMD --> BE -->|reply/hide| FB
+    BE -->|failure| FAILED --> RS
+    RS -->|retry| RETRY --> BE
+    RS -->|exhausted| DLQ --> ALERT
 ```
 
-## 3. Technical Prerequisites
+## Các service chính
 
-### 3.1. Environments and SDKs
+| Service | Vai trò |
+|---|---|
+| `webhook-service` | Nhận webhook từ Facebook, verify request, normalize event, publish `raw_events`. |
+| `core-service` | Consume `raw_events`, phân tích AI/rule, phát hiện spam/rate limit, lưu trạng thái, publish `reply_commands`. |
+| `backend-api` | Cung cấp admin API proxy Facebook Graph API, consume `reply_commands` và `send_retry`, xử lý idempotency, reply/hide comment, publish `send_failed` khi lỗi. |
+| `retry-service` | Consume `send_failed`, lập lịch retry theo exponential backoff, publish `send_retry` hoặc `dead_letter`. |
+| `shared/PageApi.Shared` | Chứa Kafka contracts, topic names, retry planner, circuit breaker, core decision rules và schema SQL dùng chung. |
 
-- **.NET 8 SDK**: Nền tảng phát triển chính cho các dịch vụ phía Backend.
-- **Docker Desktop**: Yêu cầu để vận hành hạ tầng Kafka, Zookeeper và các công cụ quản trị liên quan.
+## Hạ tầng sử dụng
 
-### 3.2. Supporting Infrastructure
+- Kafka + Zookeeper: message broker cho pipeline realtime.
+- PostgreSQL: lưu trạng thái event, idempotency, review, blacklist.
+- Kafka UI: quan sát topic/message.
+- Prometheus + Kafka Exporter: theo dõi Kafka offset/lag.
+- Alertmanager: route alert vận hành.
+- Discord webhook: nhận cảnh báo critical, đặc biệt là DLQ.
 
-- **ngrok / Cloudflare Tunnel**: Công cụ tạo HTTPS tunnel để nhận request từ Meta tới môi trường local.
-- **Kafka UI**: Giao diện quản trị Kafka, mặc định truy cập tại địa chỉ `http://localhost:8080`.
+## Kafka topics
 
-## 4. Deployment Guide
+| Topic | Mục đích |
+|---|---|
+| `raw_events` | Event đã normalize từ webhook-service. |
+| `reply_commands` | Lệnh reply/hide/manual-review do core-service tạo. |
+| `send_retry` | Lệnh cần gửi lại sau retry. |
+| `send_failed` | Lệnh gọi Facebook API thất bại. |
+| `dead_letter` | Message đã retry hết số lần cho phép và cần xử lý thủ công. |
 
-Yêu cầu thực hiện các câu lệnh từ thư mục gốc của dự án (Root Directory).
+## Kết quả demo
 
-### Bước 1: Khởi tạo hạ tầng dịch vụ
+Kết quả demo được tổng hợp trong [RESULT.md](./RESULT.md), gồm các nhóm bằng chứng chính:
 
-Sử dụng Docker Compose để triển khai Kafka và các dịch vụ phụ trợ:
+- User A: Page tự động reply cho hỏi giá, positive, neutral và negative comment.
+- User B: spam link/keyword bị hide và không hiển thị ở góc nhìn người khác.
+- User C: unknown/rate-limit không bị auto reply sai.
+- Page: comment do chính Page tạo không gây vòng lặp tự reply.
+- Retry: `send_failed -> send_retry -> dead_letter` hoạt động đúng.
+- Monitoring: Kafka UI, Prometheus, Alertmanager và Discord chứng minh DLQ alert.
 
-```powershell
-docker compose up -d
-```
+## Tài liệu hướng dẫn
 
-### Bước 2: Vận hành Webhook Service
-
-Mở terminal và khởi động dịch vụ tiếp nhận webhook:
-
-```powershell
-dotnet run --project "Page API/WebhookService/WebhookService.csproj"
-```
-
-Mặc định dịch vụ sẽ lắng nghe tại cổng 3001.
-
-### Bước 3: Vận hành Core API (Kafka Consumer)
-
-Khởi động dịch vụ xử lý dữ liệu từ hàng đợi:
-
-```powershell
-dotnet run --project "Page API/Page API/Page API.csproj"
-```
-
-### Bước 4: Xác thực trạng thái hoạt động
-
-Kiểm tra tình trạng kết nối của Webhook Service:
-
-```powershell
-Invoke-WebRequest -Uri "http://localhost:3001/health" -UseBasicParsing
-```
-
-Kết quả mong đợi: Trạng thái HTTP 200 OK.
-
-## 5. Configuration and Integration
-
-### 5.1. Facebook Webhook Setup
-
-Để tích hợp với Meta Webhooks, cần thực hiện các cấu hình sau:
-
-1.  **Endpoint URL**: Sử dụng địa chỉ HTTPS được cấp bởi ngrok (ví dụ: `https://your-domain.ngrok-free.app/webhook`).
-2.  **Verify Token**: Giá trị token phải khớp với cấu hình trong file `appsettings.json` của WebhookService.
-3.  **Subscription Fields**: Đăng ký theo dõi trường `feed` để nhận các sự kiện bài viết và bình luận.
-
-### 5.2. Security Verification
-
-Hệ thống bắt buộc kiểm tra chữ ký `X-Hub-Signature-256` trong Header của mỗi request POST để đảm bảo tính toàn vẹn và xác thực nguồn gốc từ Meta.
-
-## 6. Verification and Testing
-
-### 6.1. Manual Verification
-
-Sử dụng công cụ Test Tool trong Meta Developer Dashboard để gửi các sự kiện giả lập. Kiểm tra nhật ký hệ thống (logs) để xác nhận luồng dữ liệu:
-
-- **WebhookService Log**: Xác nhận thông báo `Kafka published eventId=...`.
-- **Page API Log**: Xác nhận thông báo `Processed facebook event EventId=...`.
-
-### 6.2. Monitoring
-
-Người dùng có thể truy cập Kafka UI tại `http://localhost:8080` để kiểm tra trạng thái các topic và số lượng message đang tồn đọng trong hàng đợi.
-
-## 7. Public API Interfaces
-
-| Endpoint   | Method | Functionality                                        |
-| :--------- | :----- | :--------------------------------------------------- |
-| `/webhook` | `GET`  | Thực hiện quy trình xác thực (Challenge) với Meta    |
-| `/webhook` | `POST` | Tiếp nhận và xử lý payload sự kiện từ Facebook       |
-| `/health`  | `GET`  | Cung cấp thông tin trạng thái hoạt động của hệ thống |
-
-## 8. Operational Notes
-
-- **HTTPS Requirement**: Meta yêu cầu bắt buộc sử dụng giao thức HTTPS cho Callback URL.
-- **Latency**: Do sử dụng Kafka, dữ liệu có thể có độ trễ nhỏ tùy thuộc vào cấu hình của Consumer.
-- **Scaling**: WebhookService được thiết kế độc lập, cho phép mở rộng quy mô (Scale-out) dễ dàng khi lưu lượng sự kiện tăng cao.
+- [Project-Guide.md](./Docs/Project-Guide.md): hướng dẫn cấu hình, chạy hạ tầng và chạy các service.
+- [Test-Dataset.md](./Docs/Test-Dataset.md): bộ comment/test case cho Bài 2, Bài 3, spam, rate limit, Page self-reply, retry, DLQ và alert.
+- [System_design.md](./Docs/System_design.md): mô tả kiến trúc, luồng dữ liệu, topic và cơ chế reliability.

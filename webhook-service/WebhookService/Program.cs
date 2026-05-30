@@ -12,7 +12,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.Configure<FacebookWebhookOptions>(builder.Configuration.GetSection("Facebook"));
 builder.Services.Configure<KafkaOptions>(builder.Configuration.GetSection("Kafka"));
-builder.Services.AddSingleton<FacebookCommentEventNormalizer>();
+builder.Services.AddSingleton<FacebookEventNormalizer>();
 builder.Services.AddSingleton<IKafkaEventPublisher, KafkaEventPublisher>();
 
 var app = builder.Build();
@@ -59,7 +59,7 @@ app.MapGet("/webhook", (HttpRequest request, IOptions<FacebookWebhookOptions> op
 app.MapPost("/webhook", async (
     HttpRequest request,
     IOptions<FacebookWebhookOptions> options,
-    FacebookCommentEventNormalizer normalizer,
+    FacebookEventNormalizer normalizer,
     IKafkaEventPublisher kafkaPublisher,
     ILogger<Program> logger) =>
 {
@@ -102,10 +102,12 @@ app.MapPost("/webhook", async (
         return Results.BadRequest(new { error = "Invalid JSON payload." });
     }
 
-    var normalizedEvents = normalizer.NormalizeCommentEvents(payload, options.Value.PageId);
+    var normalizedEvents = normalizer.NormalizeEvents(payload, options.Value.PageId);
     if (normalizedEvents.Count == 0)
     {
-        logger.LogInformation("Webhook accepted but no supported comment events were found.");
+        logger.LogInformation(
+            "Webhook accepted but no supported comment events were found. Summary={PayloadSummary}",
+            normalizer.DescribePayload(payload, options.Value.PageId));
         return Results.Ok(new { received = true, normalized = 0, ignored = true });
     }
 

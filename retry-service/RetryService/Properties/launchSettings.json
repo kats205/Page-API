@@ -4,6 +4,7 @@
     "RetryService": {
       "commandName": "Project",
       "dotnetRunMessages": true,
+      "applicationUrl": "http://localhost:3003",
       "environmentVariables": {
         "DOTNET_ENVIRONMENT": "Development"
       }
