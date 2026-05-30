@@ -7,12 +7,18 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<KafkaOptions>(builder.Configuration.GetSection("Kafka"));
 builder.Services.Configure<PostgresOptions>(builder.Configuration.GetSection("Postgres"));
 builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection("Gemini"));
+builder.Services.Configure<FacebookCircuitBreakerOptions>(builder.Configuration.GetSection("GeminiCircuitBreaker"));
 builder.Services.Configure<CoreProcessingOptions>(builder.Configuration.GetSection("Processing"));
 
 builder.Services.AddSingleton(sp =>
 {
     var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CoreProcessingOptions>>().Value;
     return new CoreDecisionEngine(options);
+});
+builder.Services.AddSingleton(sp =>
+{
+    var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<FacebookCircuitBreakerOptions>>().Value;
+    return new FacebookCircuitBreaker(options);
 });
 builder.Services.AddSingleton<CoreStateRepository>();
 builder.Services.AddSingleton<KafkaCoreCommandPublisher>();

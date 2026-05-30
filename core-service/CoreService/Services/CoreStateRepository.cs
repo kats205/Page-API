@@ -137,7 +137,8 @@ public sealed class CoreStateRepository
                 ("reason", decision.Reason));
         }
 
-        if (decision.Action is CommandAction.ManualReview or CommandAction.HideAndReview)
+        if (decision.RequiresManualReview
+            || decision.Action is CommandAction.ManualReview or CommandAction.HideAndReview)
         {
             await ExecuteAsync(connection, transaction, """
                 INSERT INTO manual_review_items(event_id, actor_id, reason, payload_json)
