@@ -11,7 +11,8 @@ await TestRunner.RunAsync(
     ("ApiResponse wraps failures with codes", ApiResponseWrapsFailuresWithCodes),
     ("Admin API key authentication uses the expected header", AdminApiKeyUsesExpectedHeader),
     ("Command consumer defaults to Bai 2 Kafka topics", CommandConsumerDefaultsToBai2Topics),
-    ("FacebookService retries transient Facebook errors", FacebookServiceRetriesTransientErrors));
+    ("FacebookService retries transient Facebook errors", FacebookServiceRetriesTransientErrors),
+    ("FacebookService does not retry invalid token errors", FacebookServiceDoesNotRetryInvalidTokenErrors));
 
 static Task ApiResponseWrapsSuccessfulData()
 {
@@ -89,6 +90,45 @@ static async Task FacebookServiceRetriesTransientErrors()
 
     Assert.NotNull(result, "CreatePostAsync should return the successful Graph API response.");
     Assert.Equal(2, handler.RequestCount);
+}
+
+static async Task FacebookServiceDoesNotRetryInvalidTokenErrors()
+{
+    var handler = new SequencedHttpMessageHandler(
+        new HttpResponseMessage(HttpStatusCode.Unauthorized)
+        {
+            Content = new StringContent("{\"error\":{\"message\":\"invalid token\",\"code\":190}}", Encoding.UTF8, "application/json")
+        });
+
+    using var client = new HttpClient(handler)
+    {
+        BaseAddress = new Uri("https://graph.facebook.com/v19.0/")
+    };
+
+    var service = new FacebookService(
+        client,
+        new TestOptionsSnapshot<FacebookOptions>(new FacebookOptions
+        {
+            PageAccessToken = "token"
+        }),
+        new TestOptionsSnapshot<FacebookRetryOptions>(new FacebookRetryOptions
+        {
+            MaxRetries = 3,
+            BaseDelayMilliseconds = 1
+        }),
+        NullLogger<FacebookService>.Instance);
+
+    try
+    {
+        await service.CreatePostAsync("page_1", new CreatePostRequest { Message = "hello" });
+        throw new InvalidOperationException("Expected FacebookApiException for invalid token.");
+    }
+    catch (FacebookApiException ex)
+    {
+        Assert.Equal(HttpStatusCode.Unauthorized, ex.UpstreamStatusCode);
+    }
+
+    Assert.Equal(1, handler.RequestCount);
 }
 
 internal sealed class TestOptionsSnapshot<T> : IOptionsSnapshot<T>

@@ -11,12 +11,18 @@ public sealed class GeminiIntentAnalyzer
 {
     private readonly HttpClient _httpClient;
     private readonly GeminiOptions _options;
+    private readonly FacebookCircuitBreaker _circuitBreaker;
     private readonly ILogger<GeminiIntentAnalyzer> _logger;
 
-    public GeminiIntentAnalyzer(HttpClient httpClient, IOptions<GeminiOptions> options, ILogger<GeminiIntentAnalyzer> logger)
+    public GeminiIntentAnalyzer(
+        HttpClient httpClient,
+        IOptions<GeminiOptions> options,
+        FacebookCircuitBreaker circuitBreaker,
+        ILogger<GeminiIntentAnalyzer> logger)
     {
         _httpClient = httpClient;
         _options = options.Value;
+        _circuitBreaker = circuitBreaker;
         _logger = logger;
     }
 
@@ -27,12 +33,18 @@ public sealed class GeminiIntentAnalyzer
             return null;
         }
 
+        if (!_circuitBreaker.CanExecute(DateTimeOffset.UtcNow))
+        {
+            _logger.LogWarning("Gemini circuit breaker is open. EventId={EventId}. Using fallback rules.", rawEvent.EventId);
+            return null;
+        }
+
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.TimeoutSeconds)));
 
         try
         {
-            var endpoint = $"https://generativelanguage.googleapis.com/v1beta/models/{_options.Model}:generateContent?key={Uri.EscapeDataString(_options.ApiKey)}";
+            var endpoint = $"https://generativelanguage.googleapis.com/v1beta/models/{_options.Model}:generateContent";
             var request = new
             {
                 contents = new[]
@@ -43,17 +55,48 @@ public sealed class GeminiIntentAnalyzer
                         {
                             new
                             {
-                                text = "Classify this Facebook page comment/message. Return only JSON with intent and sentiment. Allowed intents: ask_price, complaint, praise, spam, unknown. Allowed sentiments: positive, neutral, negative. Text: " + rawEvent.Message
+                                text = "Classify this Facebook page comment/message. Return only JSON with intent and sentiment. Allowed intents: ask_price, complaint, praise, neutral_feedback, spam, unknown. Allowed sentiments: positive, neutral, negative. Text: " + rawEvent.Message
                             }
                         }
                     }
+                },
+                generationConfig = new
+                {
+                    temperature = 0.1,
+                    responseMimeType = "application/json"
                 }
             };
 
-            var response = await _httpClient.PostAsJsonAsync(endpoint, request, timeout.Token);
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
+            {
+                Content = JsonContent.Create(request)
+            };
+            httpRequest.Headers.Add("x-goog-api-key", _options.ApiKey);
+
+            var response = await _httpClient.SendAsync(httpRequest, timeout.Token);
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning("Gemini returned non-success status {StatusCode}; using fallback.", (int)response.StatusCode);
+                var errorBody = await response.Content.ReadAsStringAsync(timeout.Token);
+                if (IsQuotaError((int)response.StatusCode, errorBody))
+                {
+                    _logger.LogWarning(
+                        "Gemini quota or rate limit reached. StatusCode={StatusCode} Model={Model} EventId={EventId}. Using fallback rules. Error={ErrorBody}",
+                        (int)response.StatusCode,
+                        _options.Model,
+                        rawEvent.EventId,
+                        Truncate(errorBody, 500));
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Gemini returned non-success status {StatusCode}. Model={Model} EventId={EventId}. Using fallback rules. Error={ErrorBody}",
+                        (int)response.StatusCode,
+                        _options.Model,
+                        rawEvent.EventId,
+                        Truncate(errorBody, 500));
+                }
+
+                _circuitBreaker.RecordFailure(DateTimeOffset.UtcNow);
                 return null;
             }
 
@@ -66,10 +109,19 @@ public sealed class GeminiIntentAnalyzer
                 .GetProperty("text")
                 .GetString();
 
-            return ParseClassification(text);
+            var classification = ParseClassification(text);
+            if (classification is null)
+            {
+                _circuitBreaker.RecordFailure(DateTimeOffset.UtcNow);
+                return null;
+            }
+
+            _circuitBreaker.RecordSuccess();
+            return classification;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException)
         {
+            _circuitBreaker.RecordFailure(DateTimeOffset.UtcNow);
             _logger.LogWarning(ex, "Gemini analysis failed; using fallback.");
             return null;
         }
@@ -104,5 +156,30 @@ public sealed class GeminiIntentAnalyzer
         }
 
         return new AiClassification(intent ?? "unknown", sentiment ?? "neutral");
+    }
+
+    private static bool IsQuotaError(int statusCode, string errorBody)
+    {
+        if (statusCode == StatusCodes.Status429TooManyRequests)
+        {
+            return true;
+        }
+
+        return errorBody.Contains("RESOURCE_EXHAUSTED", StringComparison.OrdinalIgnoreCase)
+            || errorBody.Contains("quota", StringComparison.OrdinalIgnoreCase)
+            || errorBody.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            || errorBody.Contains("rate_limit", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return value.Length <= maxLength
+            ? value
+            : value[..maxLength] + "...";
     }
 }
