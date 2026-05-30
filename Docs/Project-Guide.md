@@ -1,6 +1,6 @@
-# Hướng dẫn chạy Bài 2 trên Facebook Page thật
+# Hướng dẫn chạy dự án trên Facebook Page thật
 
-Tài liệu này chỉ hướng dẫn cách cấu hình và chạy dự án Bài 2 với Facebook Page thật. Phần dữ liệu test, kết quả kỳ vọng và lệnh kiểm chứng chi tiết nằm trong [Bai2-Test-Matrix.md](./Bai2-Test-Matrix.md).
+Tài liệu này chỉ hướng dẫn cách cấu hình và chạy dự án với Facebook Page thật. Phần dữ liệu test, kết quả kỳ vọng và lệnh kiểm chứng chi tiết nằm trong [Test-Dataset.md](./Test-Dataset.md).
 
 ## 1. Điều kiện cần trước khi chạy
 
@@ -251,9 +251,7 @@ Nguyên nhân thường gặp:
 
 Sau khi hệ thống chạy ổn, dùng file sau để test từng case và kiểm chứng kết quả:
 
-- [Bai2-Test-Matrix.md](./Bai2-Test-Matrix.md)
-- [Comment-Test-Matrix.md](./Comment-Test-Matrix.md)
-- [Bai3-E2E-Guide.md](./Bai3-E2E-Guide.md)
+- [Test-Dataset.md](./Test-Dataset.md)
 
 File đó chứa:
 
@@ -261,15 +259,3 @@ File đó chứa:
 - Kết quả kỳ vọng.
 - Action kỳ vọng.
 - Lệnh kiểm tra PostgreSQL, Kafka, retry, DLQ và alert Discord.
-
-## 10. Ghi chú riêng cho Bài 3
-
-Bài 3 dùng lại pipeline Bài 2 nhưng chấm riêng phần AI sentiment và automation:
-
-1. Positive comment được reply cảm ơn.
-2. Neutral feedback được reply ghi nhận.
-3. Negative comment được reply xin lỗi và đưa vào manual review.
-4. Spam comment được hide và đưa vào manual review.
-5. Retry, circuit breaker, idempotency, DLQ và alert được chứng minh bằng các lệnh trong [Bai3-E2E-Guide.md](./Bai3-E2E-Guide.md).
-
-Alertmanager trong repo hiện gửi Discord thay vì Slack. Khi trình bày, cần nói rõ đây là lựa chọn demo vận hành theo kênh đã cấu hình.
