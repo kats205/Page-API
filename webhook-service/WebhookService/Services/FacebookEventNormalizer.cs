@@ -7,6 +7,43 @@ namespace WebhookService.Services;
 
 public class FacebookEventNormalizer
 {
+    public string DescribePayload(JToken payload, string? expectedPageId)
+    {
+        if (payload is not JObject root)
+        {
+            return "payload is not a JSON object";
+        }
+
+        var entries = (root["entry"] as JArray)?.OfType<JObject>()
+            .Select(entry => new
+            {
+                entry_id = entry.Value<string>("id"),
+                expected_page_id = expectedPageId,
+                page_id_matches = IsExpectedPage(entry.Value<string>("id") ?? string.Empty, expectedPageId),
+                changes = (entry["changes"] as JArray)?.OfType<JObject>()
+                    .Select(change => new
+                    {
+                        field = change.Value<string>("field"),
+                        item = change["value"]?.Value<string>("item"),
+                        verb = change["value"]?.Value<string>("verb"),
+                        post_id = change["value"]?.Value<string>("post_id"),
+                        sender_id = change["value"]?.Value<string>("sender_id"),
+                        from_id = change["value"]?["from"]?.Value<string>("id"),
+                        comment_id_present = !string.IsNullOrWhiteSpace(change["value"]?.Value<string>("comment_id")),
+                        message_present = !string.IsNullOrWhiteSpace(change["value"]?.Value<string>("message"))
+                    })
+                    .ToArray(),
+                messaging_count = (entry["messaging"] as JArray)?.Count ?? 0
+            })
+            .ToArray();
+
+        return JsonConvert.SerializeObject(new
+        {
+            @object = root.Value<string>("object"),
+            entries
+        });
+    }
+
     public IReadOnlyList<RawEventMessage> NormalizeEvents(JToken payload, string? expectedPageId)
     {
         var result = new List<RawEventMessage>();
@@ -70,12 +107,18 @@ public class FacebookEventNormalizer
                 continue;
             }
 
+            var userId = value.Value<string>("sender_id") ?? value["from"]?["id"]?.ToString();
+            if (IsPageAuthored(userId, pageId))
+            {
+                continue;
+            }
+
             var raw = new RawEventMessage
             {
                 PageId = pageId,
                 PostId = value.Value<string>("post_id"),
                 CommentId = value.Value<string>("comment_id"),
-                UserId = value.Value<string>("sender_id") ?? value["from"]?["id"]?.ToString(),
+                UserId = userId,
                 Message = value.Value<string>("message"),
                 CreatedAt = ParseCreatedAt(value["created_time"]) ?? receivedAt,
                 ReceivedAt = receivedAt,
@@ -103,7 +146,13 @@ public class FacebookEventNormalizer
             var message = messageEvent["message"] as JObject;
             var text = message?.Value<string>("text");
             var messageId = message?.Value<string>("mid");
+            var userId = messageEvent["sender"]?["id"]?.ToString();
             if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(messageId))
+            {
+                continue;
+            }
+
+            if (IsPageAuthored(userId, pageId))
             {
                 continue;
             }
@@ -112,7 +161,7 @@ public class FacebookEventNormalizer
             {
                 PageId = pageId,
                 MessageId = messageId,
-                UserId = messageEvent["sender"]?["id"]?.ToString(),
+                UserId = userId,
                 Message = text,
                 CreatedAt = ParseCreatedAt(messageEvent["timestamp"]) ?? receivedAt,
                 ReceivedAt = receivedAt,
@@ -127,6 +176,12 @@ public class FacebookEventNormalizer
     {
         return string.IsNullOrWhiteSpace(expectedPageId)
             || string.Equals(pageId, expectedPageId, StringComparison.Ordinal);
+    }
+
+    private static bool IsPageAuthored(string? actorId, string pageId)
+    {
+        return !string.IsNullOrWhiteSpace(actorId)
+            && string.Equals(actorId, pageId, StringComparison.Ordinal);
     }
 
     private static DateTimeOffset? ParseCreatedAt(JToken? token)

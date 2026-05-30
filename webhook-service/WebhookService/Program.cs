@@ -105,7 +105,9 @@ app.MapPost("/webhook", async (
     var normalizedEvents = normalizer.NormalizeEvents(payload, options.Value.PageId);
     if (normalizedEvents.Count == 0)
     {
-        logger.LogInformation("Webhook accepted but no supported comment events were found.");
+        logger.LogInformation(
+            "Webhook accepted but no supported comment events were found. Summary={PayloadSummary}",
+            normalizer.DescribePayload(payload, options.Value.PageId));
         return Results.Ok(new { received = true, normalized = 0, ignored = true });
     }
 
