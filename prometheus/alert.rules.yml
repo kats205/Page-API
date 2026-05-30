@@ -20,7 +20,7 @@ groups:
           description: "Consumer group {{ $labels.consumergroup }} is lagging on topic {{ $labels.topic }}."
 
       - alert: WebhookReceiverSilent
-        expr: increase(kafka_topic_partition_current_offset{topic="raw_events"}[5m]) == 0
+        expr: sum(increase(kafka_topic_partition_current_offset{topic="raw_events"}[5m])) == 0
         for: 10m
         labels:
           severity: warning

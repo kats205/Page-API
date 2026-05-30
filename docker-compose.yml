@@ -50,7 +50,9 @@ services:
   kafka-exporter:
     image: danielqsj/kafka-exporter:latest
     depends_on:
-      - kafka
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
     ports:
       - "9308:9308"
     command:
